@@ -1,0 +1,8 @@
+#compiled python modules
+*.pyc
+
+#Notebook checkpoints and data
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+*/*/.ipynb_checkpoints/
+*/*/*/.ipynb_checkpoints/
