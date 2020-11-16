@@ -1,0 +1,115 @@
+units		metal
+boundary	p p p
+atom_style	charge
+
+
+#  Simulation control  #########################################################
+box tilt	small
+read_data	'xo.lmp'
+
+variable	Nele equal 3
+variable	Elements string 'Li Co O'
+
+variable	Electrostatic string 'T'
+variable	Nevery_qeq equal 1000
+variable	maxiter_qeq equal 50
+variable	maxrepeat_qeq equal 10
+
+variable	deltat equal 0.001
+variable	Tini equal 200
+variable	Tfin equal 800
+variable	Tint equal 200
+variable	Tdamp equal 100		#  in unit of timestep
+variable	Twindow equal 50
+variable	Tfraction equal 1.0
+variable	Ptarget equal 0.0
+variable	Pdamp equal 1000	#  in unit of timestep
+
+variable	Nstep equal 50000
+variable	Nprnt equal	10
+
+variable	Ndump equal	5000		
+variable	dataout string 'dataout.heat'
+################################################################################
+
+
+#  Potential
+if "${Electrostatic} == T" then &
+	"pair_style	hybrid/overlay coul/streitz 12.0 wolf 0.20 meam" &
+	"pair_coeff	* * meam			'library.meam' ${Elements} 'library.meam_alloy' ${Elements}" &
+	"pair_coeff	* * coul/streitz	'library.streitz' ${Elements}" &
+else &
+	"pair_style	meam" &
+	"pair_coeff	* * 'library.meam' ${Elements} 'library.meam_alloy' ${Elements}"
+
+
+#  Neighbor 
+neighbor		0.3 bin
+neigh_modify	delay 0
+
+
+#  Average Charge
+variable	n loop ${Nele} pad
+label	Qavg
+   group	type$n type $n
+   compute	q$n type$n property/atom q
+   compute	Qavg$n type$n reduce ave c_q$n
+   next	n
+jump	SELF Qavg
+
+
+#  Thermo
+thermo			${Nprnt}
+variable		ene_meam equal pe-ecoul
+thermo_style	custom step temp v_ene_meam ecoul pe etotal enthalpy press elong lx ly lz c_Qavg1 c_Qavg2
+thermo_modify	norm yes
+thermo_modify	format  1 ">THERMO:%7d"		#  step
+thermo_modify	format  2 "%6.0f"			#  temperature
+thermo_modify	format  3 "%9.5f"			#  meam energy
+thermo_modify	format  4 "%9.5f"			#  electrostatic energy
+thermo_modify	format  5 "%12.8f"			#  potential energy
+thermo_modify	format  6 "%9.5f"			#  internal energy
+thermo_modify	format  7 "%9.5f"			#  enthalpy
+thermo_modify	format  8 "%11.3f"			#  pressure
+thermo_modify	format  9 "%8.1e"			#  dummy
+thermo_modify	format 10 "%8.4f"			#  boxsize1
+thermo_modify	format 11 "%8.4f"			#  boxsize2
+thermo_modify	format 12 "%8.4f"			#  boxsize3
+thermo_modify	format 13 "%+8.5f"			#  charge1
+thermo_modify	format 14 "%+8.5f"			#  charge2
+
+thermo_modify	lost warn
+
+#  MD loop
+timestep	${deltat}
+variable	Tdmp equal ${Tdamp}*${deltat}
+variable	Pdmp equal ${Pdamp}*${deltat}
+variable	Nloop equal "ceil((v_Tfin-v_Tini)/v_Tint)+1"
+variable	i loop ${Nloop} pad
+
+if "${Electrostatic} == T" then "fix qeq 	all qeq/slater ${Nevery_qeq} 12.0 1.e-6 ${maxiter_qeq} ${maxrepeat_qeq} coul/streitz"
+
+label		md_loop
+	reset_timestep	0
+	print	'>THERMO:# loop $i'
+	print	'>THERMO:#  Step  Temp.   E_MEAM     E_ES     Potential  Int.Energy Enthalpy    Pressure                   BoxSize'
+	print	'>THERMO:#  ----  ----  ---------  --------  -----------  --------  --------  ----------  -------  -------------------------'
+
+	variable	T equal "v_Tini + (v_i-1)*v_Tint"
+	if "$i  == 1" then &
+		"velocity all create $T 12345" &
+	else &
+		"velocity all scale $T"
+	fix npt		all npt temp $T $T ${Tdmp} aniso ${Ptarget} ${Ptarget} ${Pdmp}
+	fix temp	all temp/rescale 1 $T $T ${Twindow} ${Tfraction}
+	fix com		all recenter INIT INIT INIT
+
+dump			dd1 all cfg ${Ndump} dump.$i.*  mass type xs ys zs vx vy vz q id
+dump_modify		dd1 element ${Elements}
+
+	run			${Nstep}
+	undump		dd1
+	write_data 	${dataout}.$i
+	write_dump	all cfg  ${dataout}.$i.cfg mass type xs ys zs q modify element ${Elements} sort id
+	next		i
+jump SELF	md_loop
